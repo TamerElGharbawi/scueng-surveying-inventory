@@ -1,30 +1,13 @@
 # ================================================================
-#  نظام جرد معمل المساحة | Surveying Lab Inventory Agent
+#  نظام جرد معمل المساحة | Surveying Lab Inventory
 #  جامعة قناة السويس – كلية الهندسة
-#  Version 4.0 — Manual Input | Fixed PDF Fonts | Fixed DOCX
-#  NO API REQUIRED — Image processing via PIL only
+#  Version 5.0 — DOCX Only | RTL Fixed | Single Image | Logo Support
 # ================================================================
 
 import streamlit as st
 from PIL import Image, ImageEnhance, ImageOps, ExifTags
 import io, base64, os, uuid, datetime
 from pathlib import Path
-import requests
-
-# ── PDF ──────────────────────────────────────────────────────────
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import cm
-from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph,
-    Spacer, Image as RLImage, PageBreak, HRFlowable,
-)
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_RIGHT, TA_CENTER
-import arabic_reshaper
-from bidi.algorithm import get_display
 
 # ── DOCX ─────────────────────────────────────────────────────────
 from docx import Document
@@ -38,84 +21,13 @@ from docx.oxml import OxmlElement
 # ================================================================
 # ⚙️  CONSTANTS
 # ================================================================
-PAGE_W, PAGE_H = A4
-FONT_DIR = Path("/tmp/ar_fonts")
-FONT_DIR.mkdir(exist_ok=True)
-FONT_REG  = str(FONT_DIR / "Amiri-Regular.ttf")
-FONT_BOLD = str(FONT_DIR / "Amiri-Bold.ttf")
-
 UNIV_NAME  = "جامعة قناة السويس"
 FAC_NAME   = "كلية الهندسة"
 LAB_NAME   = "معمل المساحة"
 RPT_TITLE  = "كشف جرد أجهزة ومعدات المعمل"
 STATUS_OPT = ["ممتاز", "جيد جداً", "جيد", "يحتاج صيانة", "معطل"]
 
-C_PRI  = colors.HexColor("#1a5276")
-C_SEC  = colors.HexColor("#2e86c1")
-C_ACC  = colors.HexColor("#f39c12")
-C_LITE = colors.HexColor("#eaf0fb")
-C_GRAY = colors.HexColor("#aab7b8")
-C_OK   = colors.HexColor("#1e8449")
-C_WARN = colors.HexColor("#e67e22")
-C_ERR  = colors.HexColor("#c0392b")
-C_BLK  = colors.HexColor("#1c2833")
-
-# Amiri — reliable Arabic font, hosted on GitHub releases (stable URLs)
-FONT_SOURCES = {
-    FONT_REG: [
-        "https://github.com/aliftype/amiri/raw/main/Amiri-Regular.ttf",
-        "https://cdn.jsdelivr.net/gh/aliftype/amiri@main/Amiri-Regular.ttf",
-        "https://raw.githubusercontent.com/aliftype/amiri/main/Amiri-Regular.ttf",
-    ],
-    FONT_BOLD: [
-        "https://github.com/aliftype/amiri/raw/main/Amiri-Bold.ttf",
-        "https://cdn.jsdelivr.net/gh/aliftype/amiri@main/Amiri-Bold.ttf",
-        "https://raw.githubusercontent.com/aliftype/amiri/main/Amiri-Bold.ttf",
-    ],
-}
-
-
-# ================================================================
-# 🔤  FONT SETUP
-# ================================================================
-@st.cache_resource
-def setup_fonts():
-    for path, urls in FONT_SOURCES.items():
-        # already downloaded and valid
-        if os.path.exists(path) and os.path.getsize(path) > 50_000:
-            continue
-        ok = False
-        for url in urls:
-            try:
-                r = requests.get(url, timeout=30,
-                                  headers={"User-Agent": "Mozilla/5.0"})
-                r.raise_for_status()
-                if len(r.content) < 50_000:
-                    continue
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                ok = True
-                break
-            except Exception:
-                continue
-        if not ok:
-            return False, f"فشل تحميل: {Path(path).name}"
-    try:
-        registered = pdfmetrics.getRegisteredFontNames()
-        if "Amiri" not in registered:
-            pdfmetrics.registerFont(TTFont("Amiri",      FONT_REG))
-            pdfmetrics.registerFont(TTFont("Amiri-Bold", FONT_BOLD))
-        return True, "ok"
-    except Exception as e:
-        return False, str(e)
-
-
-def ar(txt: str) -> str:
-    """Reshape + BiDi Arabic text for ReportLab."""
-    try:
-        return get_display(arabic_reshaper.reshape(str(txt)))
-    except Exception:
-        return str(txt)
+LOGO_PATH  = Path("logo.png")   # place logo.png in the same folder as app.py
 
 
 # ================================================================
@@ -167,8 +79,6 @@ label,.stSelectbox label,.stTextArea label{font-family:'Cairo',sans-serif!import
   text-align:center;background:white;direction:rtl;margin-bottom:6px;}
 .badge-primary{background:#1a5276;color:white;padding:2px 10px;border-radius:20px;
   font-size:.72rem;font-family:'Cairo',sans-serif;font-weight:700;}
-.badge-ref{background:#f39c12;color:white;padding:2px 10px;border-radius:20px;
-  font-size:.72rem;font-family:'Cairo',sans-serif;font-weight:700;}
 .dup-warning{background:#fdedec;border:2px solid #c0392b;border-radius:12px;
   padding:1rem;direction:rtl;animation:dupPulse 1.4s infinite;}
 @keyframes dupPulse{
@@ -191,10 +101,14 @@ label,.stSelectbox label,.stTextArea label{font-family:'Cairo',sans-serif!import
 # ================================================================
 def init_state():
     defs = dict(
-        inventory=[], captured_photos=[], photo_hashes=set(),
-        page="capture", professor_name="",
+        inventory=[],
+        captured_photos=[],
+        photo_hashes=set(),
+        page="capture",
+        professor_name="",
         report_date=datetime.date.today().strftime("%Y/%m/%d"),
         edit_photo_idx=None,
+        form_counter=0,          # incremented on every "add" to force widget reset
     )
     for k, v in defs.items():
         if k not in st.session_state:
@@ -204,7 +118,7 @@ init_state()
 
 
 # ================================================================
-# 🖼️  IMAGE PROCESSING (PIL only — no API needed)
+# 🖼️  IMAGE PROCESSING
 # ================================================================
 def fix_exif_rotation(img: Image.Image) -> Image.Image:
     try:
@@ -288,13 +202,18 @@ def b64img(data: bytes) -> str:
 # ================================================================
 # 🔍  DUPLICATE DETECTION
 # ================================================================
+IGNORED_SERIALS = {"", "غير مقروء", "غير محدد", "-", "—"}
+
 def is_duplicate(serial: str, exclude_idx: int = -1) -> bool:
-    if not serial or serial.strip().upper() in ["", "غير مقروء", "غير محدد", "-"]:
+    """Return True only if the same serial already exists in inventory
+    (ignoring the entry at exclude_idx, used when re-checking saved items)."""
+    s = serial.strip().upper() if serial else ""
+    if not s or s in {v.upper() for v in IGNORED_SERIALS}:
         return False
     for i, item in enumerate(st.session_state.inventory):
         if i == exclude_idx:
             continue
-        if item.get("serial_number", "").strip().upper() == serial.strip().upper():
+        if item.get("serial_number", "").strip().upper() == s:
             return True
     return False
 
@@ -303,329 +222,25 @@ def get_duplicates() -> list:
     seen: dict = {}
     for i, item in enumerate(st.session_state.inventory):
         sn = item.get("serial_number", "").strip().upper()
-        if sn and sn not in ["غير مقروء", "غير محدد", "-", ""]:
+        if sn and sn not in {v.upper() for v in IGNORED_SERIALS}:
             seen.setdefault(sn, []).append(i + 1)
     return [(sn, idx) for sn, idx in seen.items() if len(idx) > 1]
 
 
 # ================================================================
-# 📄  PDF REPORT
-# ================================================================
-class PDFReport:
-    def __init__(self, inv, prof, date):
-        self.inv  = inv
-        self.prof = prof
-        self.date = date
-        self.dups = get_duplicates()
-        self.buf  = io.BytesIO()
-
-    def _ps(self, size=10, bold=False, align=TA_RIGHT, color=C_BLK):
-        fn = "Amiri-Bold" if bold else "Amiri"
-        return ParagraphStyle(
-            f"s{uuid.uuid4().hex[:4]}",
-            fontName=fn, fontSize=size, textColor=color,
-            alignment=align, leading=int(size * 1.8), wordWrap="CJK",
-        )
-
-    def _p(self, txt, **kw):
-        return Paragraph(ar(str(txt)), self._ps(**kw))
-
-    def _hf(self, canvas, doc):
-        canvas.saveState()
-        W, H = A4
-        # top bar
-        canvas.setFillColor(C_PRI)
-        canvas.rect(0, H - 2.2*cm, W, 2.2*cm, fill=1, stroke=0)
-        # logo placeholder
-        canvas.setFillColor(colors.white)
-        canvas.setStrokeColor(C_ACC)
-        canvas.setLineWidth(1.2)
-        canvas.rect(W - 2.8*cm, H - 2.0*cm, 2.2*cm, 1.8*cm, fill=1, stroke=1)
-        canvas.setFillColor(C_GRAY)
-        canvas.setFont("Amiri", 7)
-        canvas.drawCentredString(W - 1.7*cm, H - 1.2*cm, ar("شعار"))
-        canvas.drawCentredString(W - 1.7*cm, H - 1.52*cm, ar("الجامعة"))
-        # title
-        canvas.setFillColor(colors.white)
-        canvas.setFont("Amiri-Bold", 11)
-        canvas.drawRightString(W - 3.2*cm, H - 0.95*cm,
-                               ar(f"{UNIV_NAME}  |  {FAC_NAME}"))
-        canvas.setFont("Amiri", 9)
-        canvas.drawRightString(W - 3.2*cm, H - 1.55*cm,
-                               ar(f"{LAB_NAME}   |   {self.date}"))
-        if self.prof:
-            canvas.setFillColor(colors.HexColor("#aed6f1"))
-            canvas.setFont("Amiri", 8)
-            canvas.drawString(0.6*cm, H - 1.2*cm, ar(f"أ.د / {self.prof}"))
-        # bottom bar
-        canvas.setFillColor(C_PRI)
-        canvas.rect(0, 0, W, 1.1*cm, fill=1, stroke=0)
-        canvas.setFillColor(colors.white)
-        canvas.setFont("Amiri", 8)
-        canvas.drawCentredString(W/2, 0.38*cm,
-                                 ar(f"{UNIV_NAME} — {FAC_NAME} — {LAB_NAME}"))
-        canvas.setFont("Amiri-Bold", 8)
-        canvas.drawString(0.7*cm, 0.38*cm, ar(f"صفحة {doc.page}"))
-        canvas.restoreState()
-
-    # ── COVER ────────────────────────────────────────────────────
-    def _cover(self):
-        el = [Spacer(1, 2*cm)]
-        # logo box
-        lbox = Table(
-            [[self._p("[ شعار جامعة قناة السويس ]",
-                       size=10, align=TA_CENTER, color=C_GRAY)]],
-            colWidths=[6*cm], rowHeights=[5*cm])
-        lbox.setStyle(TableStyle([
-            ("ALIGN",      (0,0),(-1,-1), "CENTER"),
-            ("VALIGN",     (0,0),(-1,-1), "MIDDLE"),
-            ("BOX",        (0,0),(-1,-1),  2, C_ACC),
-            ("BACKGROUND", (0,0),(-1,-1), C_LITE),
-        ]))
-        wrap = Table([[lbox]], colWidths=[PAGE_W - 4*cm])
-        wrap.setStyle(TableStyle([("ALIGN",(0,0),(-1,-1),"CENTER")]))
-        el += [wrap, Spacer(1, .6*cm)]
-        el.append(self._p(UNIV_NAME, size=19, bold=True, align=TA_CENTER, color=C_PRI))
-        el += [Spacer(1,.18*cm),
-               self._p(FAC_NAME, size=14, bold=True, align=TA_CENTER, color=C_SEC),
-               Spacer(1,.12*cm),
-               self._p(LAB_NAME, size=12, align=TA_CENTER),
-               Spacer(1,.8*cm),
-               HRFlowable(width="70%", thickness=2, color=C_ACC, hAlign="CENTER"),
-               Spacer(1,.6*cm),
-               self._p(RPT_TITLE, size=16, bold=True, align=TA_CENTER),
-               Spacer(1,.3*cm)]
-        yr = datetime.datetime.now().year
-        el.append(self._p(f"العام الدراسي {yr-1} / {yr}", size=11, align=TA_CENTER))
-        el.append(Spacer(1, 1.4*cm))
-        rows = [
-            [self._p("تاريخ الجرد :", size=11, bold=True), self._p(self.date, size=11)],
-            [self._p("المُعِد :", size=11, bold=True), self._p(self.prof or "—", size=11)],
-            [self._p("إجمالي الأجهزة :", size=11, bold=True),
-             self._p(str(len(self.inv)), size=12, bold=True, color=C_PRI)],
-        ]
-        info = Table(rows, colWidths=[4.5*cm, 8*cm])
-        info.setStyle(TableStyle([
-            ("ALIGN",         (0,0),(-1,-1), "RIGHT"),
-            ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
-            ("ROWBACKGROUNDS",(0,0),(-1,-1), [C_LITE, colors.white, C_LITE]),
-            ("BOX",           (0,0),(-1,-1),  1, C_SEC),
-            ("INNERGRID",     (0,0),(-1,-1), .5, C_GRAY),
-            ("TOPPADDING",    (0,0),(-1,-1),  8),
-            ("BOTTOMPADDING", (0,0),(-1,-1),  8),
-            ("RIGHTPADDING",  (0,0),(-1,-1),  8),
-            ("LEFTPADDING",   (0,0),(-1,-1),  8),
-        ]))
-        outer = Table([[info]], colWidths=[PAGE_W - 4*cm])
-        outer.setStyle(TableStyle([("ALIGN",(0,0),(-1,-1),"CENTER")]))
-        el.append(outer)
-        return el
-
-    # ── STATS ────────────────────────────────────────────────────
-    def _stats(self):
-        el = [self._p("الملخص الإحصائي", size=13, bold=True, color=C_PRI),
-              HRFlowable(width="100%", thickness=1, color=C_SEC),
-              Spacer(1, .3*cm)]
-        brands = {}; conds = {}
-        for item in self.inv:
-            b = item.get("brand", "غير محدد")
-            brands[b] = brands.get(b, 0) + 1
-            c = item.get("condition", "غير محدد")
-            conds[c] = conds.get(c, 0) + 1
-        need  = conds.get("يحتاج صيانة", 0) + conds.get("معطل", 0)
-        excel = conds.get("ممتاز", 0) + conds.get("جيد جداً", 0)
-        rows = [
-            [self._p("البيان",  size=10, bold=True, color=colors.white),
-             self._p("القيمة",  size=10, bold=True, color=colors.white)],
-            [self._p("إجمالي عدد الأجهزة", size=10),
-             self._p(str(len(self.inv)), size=10, bold=True)],
-            [self._p("عدد الماركات المختلفة", size=10),
-             self._p(str(len(brands)), size=10, bold=True)],
-            [self._p("ممتاز / جيد جداً", size=10),
-             self._p(str(excel), size=10, bold=True, color=C_OK)],
-            [self._p("تحتاج صيانة / معطلة", size=10),
-             self._p(str(need), size=10, bold=True, color=C_ERR)],
-        ]
-        if self.dups:
-            rows.append([self._p("أرقام تسلسلية مكررة", size=10, color=C_ERR),
-                          self._p(str(len(self.dups)), size=10, bold=True, color=C_ERR)])
-        tbl = Table(rows, colWidths=[11*cm, 4*cm])
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0),(-1,0),  C_PRI),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1), [C_LITE, colors.white]),
-            ("BOX",           (0,0),(-1,-1),  1, C_PRI),
-            ("INNERGRID",     (0,0),(-1,-1), .5, C_GRAY),
-            ("ALIGN",         (0,0),(-1,-1), "RIGHT"),
-            ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
-            ("TOPPADDING",    (0,0),(-1,-1),  6),
-            ("BOTTOMPADDING", (0,0),(-1,-1),  6),
-            ("LEFTPADDING",   (0,0),(-1,-1),  6),
-            ("RIGHTPADDING",  (0,0),(-1,-1),  6),
-        ]))
-        el.append(tbl)
-        if brands:
-            el += [Spacer(1, .3*cm),
-                   self._p("توزيع الماركات:  " +
-                            "  |  ".join(f"{b}: {c}"
-                                         for b, c in sorted(brands.items(), key=lambda x: -x[1])),
-                            size=9, color=C_SEC)]
-        return el
-
-    # ── MAIN TABLE ───────────────────────────────────────────────
-    def _inv_table(self):
-        el = [PageBreak(),
-              self._p("كشف الأجهزة والمعدات", size=13, bold=True, color=C_PRI),
-              HRFlowable(width="100%", thickness=1, color=C_SEC),
-              Spacer(1, .3*cm)]
-        CW = [1*cm, 3.3*cm, 2.5*cm, 2.4*cm, 2*cm, 3*cm, 3*cm]
-        hdr = [
-            self._p("م",                size=9, bold=True, align=TA_CENTER, color=colors.white),
-            self._p("نوع الجهاز",        size=9, bold=True, color=colors.white),
-            self._p("الماركة / المصنّع", size=9, bold=True, color=colors.white),
-            self._p("الرقم التسلسلي",    size=9, bold=True, color=colors.white),
-            self._p("الحالة",            size=9, bold=True, align=TA_CENTER, color=colors.white),
-            self._p("الملاحظات",         size=9, bold=True, color=colors.white),
-            self._p("صورة الجهاز",       size=9, bold=True, align=TA_CENTER, color=colors.white),
-        ]
-        data = [hdr]
-        ROW_H = 3.2*cm
-        for i, item in enumerate(self.inv):
-            cond = item.get("condition", "")
-            cc = (C_OK   if cond in ["ممتاز", "جيد جداً"] else
-                  C_SEC  if cond == "جيد" else
-                  C_WARN if cond == "يحتاج صيانة" else C_ERR)
-            ph = None
-            for p in item.get("photos", []):
-                if p.get("is_primary"):
-                    ph = p["data"]; break
-            if ph is None and item.get("photos"):
-                ph = item["photos"][0]["data"]
-            if ph:
-                img_cell = RLImage(io.BytesIO(thumb(ph, (113, 113))),
-                                   width=3*cm, height=3*cm)
-            else:
-                img_cell = self._p("لا صورة", size=8, align=TA_CENTER, color=C_GRAY)
-            data.append([
-                self._p(str(i+1),                      size=9,  align=TA_CENTER),
-                self._p(item.get("device_type", "—"),  size=9),
-                self._p(item.get("brand", "—"),         size=9),
-                self._p(item.get("serial_number", "—"), size=8),
-                self._p(cond,                           size=8,  align=TA_CENTER, color=cc),
-                self._p(item.get("notes", "—"),         size=8),
-                img_cell,
-            ])
-        tbl = Table(data, colWidths=CW,
-                    rowHeights=[0.7*cm] + [ROW_H]*len(self.inv), repeatRows=1)
-        tstyle = [
-            ("BACKGROUND",    (0,0),(-1,0),  C_PRI),
-            ("BOX",           (0,0),(-1,-1),  1.5, C_PRI),
-            ("INNERGRID",     (0,0),(-1,-1), .5,   C_GRAY),
-            ("ALIGN",         (0,0),(0,-1),  "CENTER"),
-            ("ALIGN",         (4,1),(4,-1),  "CENTER"),
-            ("ALIGN",         (6,1),(6,-1),  "CENTER"),
-            ("ALIGN",         (0,0),(-1,0),  "RIGHT"),
-            ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
-            ("TOPPADDING",    (0,0),(-1,-1),  4),
-            ("BOTTOMPADDING", (0,0),(-1,-1),  4),
-            ("LEFTPADDING",   (0,0),(-1,-1),  4),
-            ("RIGHTPADDING",  (0,0),(-1,-1),  4),
-        ]
-        for r in range(1, len(data)):
-            tstyle.append(("BACKGROUND", (0,r),(-1,r),
-                            C_LITE if r % 2 == 0 else colors.white))
-        tbl.setStyle(TableStyle(tstyle))
-        el.append(tbl)
-        return el
-
-    # ── DUPS ─────────────────────────────────────────────────────
-    def _dups_table(self):
-        el = [PageBreak(),
-              self._p("تحذير: أرقام تسلسلية مكررة", size=13, bold=True, color=C_ERR),
-              HRFlowable(width="100%", thickness=2, color=C_ERR),
-              Spacer(1, .3*cm),
-              self._p("يرجى مراجعة الأجهزة التالية:", size=10),
-              Spacer(1, .3*cm)]
-        rows = [[self._p("الرقم التسلسلي", size=10, bold=True, color=colors.white),
-                  self._p("أرقام الصفوف",  size=10, bold=True, color=colors.white)]]
-        for sn, idx in self.dups:
-            rows.append([self._p(sn, size=10, color=C_ERR),
-                          self._p("، ".join(str(x) for x in idx), size=10)])
-        tbl = Table(rows, colWidths=[9*cm, 6*cm])
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0),(-1,0),  C_ERR),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.HexColor("#fdedec"), colors.white]),
-            ("BOX",           (0,0),(-1,-1),  1.5, C_ERR),
-            ("INNERGRID",     (0,0),(-1,-1), .5,   C_GRAY),
-            ("ALIGN",         (0,0),(-1,-1), "RIGHT"),
-            ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
-            ("TOPPADDING",    (0,0),(-1,-1),  7),
-            ("BOTTOMPADDING", (0,0),(-1,-1),  7),
-            ("LEFTPADDING",   (0,0),(-1,-1),  7),
-            ("RIGHTPADDING",  (0,0),(-1,-1),  7),
-        ]))
-        el.append(tbl)
-        return el
-
-    # ── SIGNATURE ────────────────────────────────────────────────
-    def _sig(self):
-        el = [Spacer(1, 2*cm),
-              HRFlowable(width="100%", thickness=.5, color=C_GRAY),
-              Spacer(1, .5*cm)]
-        rows = [
-            [self._p("اعتُمد بمعرفة:", size=10),
-             self._p("المراجع / الرئيس المباشر:", size=10)],
-            [self._p("أ.د / " + (self.prof or "............................"), size=11, bold=True),
-             self._p("د / ....................................", size=11)],
-            [Spacer(1, 1.4*cm), Spacer(1, 1.4*cm)],
-            [self._p("التوقيع:  ___________________", size=10, color=C_GRAY),
-             self._p("التوقيع:  ___________________", size=10, color=C_GRAY)],
-            [self._p(f"التاريخ:  {self.date}", size=10),
-             self._p("التاريخ:  _____  /  _____  /  _____", size=10)],
-        ]
-        tbl = Table(rows, colWidths=[8.5*cm, 8.5*cm])
-        tbl.setStyle(TableStyle([
-            ("ALIGN",        (0,0),(0,-1), "RIGHT"),
-            ("ALIGN",        (1,0),(1,-1), "LEFT"),
-            ("VALIGN",       (0,0),(-1,-1),"MIDDLE"),
-            ("TOPPADDING",   (0,0),(-1,-1), 6),
-            ("BOTTOMPADDING",(0,0),(-1,-1), 4),
-        ]))
-        el += [tbl, Spacer(1, .4*cm),
-               self._p(f"هذا الكشف صادر من إدارة {LAB_NAME} — {FAC_NAME} — {UNIV_NAME}",
-                        size=8, align=TA_CENTER, color=C_GRAY)]
-        return el
-
-    def build(self) -> bytes:
-        doc = SimpleDocTemplate(
-            self.buf, pagesize=A4,
-            rightMargin=2*cm, leftMargin=2*cm,
-            topMargin=2.7*cm, bottomMargin=1.8*cm,
-        )
-        story  = self._cover() + [PageBreak()]
-        story += self._stats()
-        story += self._inv_table()
-        if self.dups:
-            story += self._dups_table()
-        story += self._sig()
-        doc.build(story, onFirstPage=self._hf, onLaterPages=self._hf)
-        return self.buf.getvalue()
-
-
-# ================================================================
-# 📝  DOCX REPORT  — Fixed NoneType rPr bug
+# 📝  DOCX HELPERS
 # ================================================================
 def _safe_set_hint(run):
     """Safely set w:hint=cs on run's rFonts, creating elements if missing."""
-    rPr = run._element.get_or_add_rPr()           # never None
+    rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
         rFonts = OxmlElement("w:rFonts")
         rPr.insert(0, rFonts)
-    rFonts.set(qn("w:hint"), "cs")                 # now safe
+    rFonts.set(qn("w:hint"), "cs")
 
 
 def _safe_run(para, text, bold=False, size=11, color_hex=None):
-    """Add a run with safe Arabic font hint."""
     run = para.add_run(text)
     run.bold = bold
     run.font.name = "Amiri"
@@ -651,6 +266,28 @@ def _cell_shd(cell, fill_hex):
     cell._tc.get_or_add_tcPr().append(shd)
 
 
+def _set_table_rtl(tbl):
+    """Force table to render right-to-left (columns order reversed visually)."""
+    tblPr = tbl._tbl.get_or_add_tblPr()
+    bidi = OxmlElement("w:bidiVisual")
+    bidi.set(qn("w:val"), "1")
+    tblPr.append(bidi)
+
+
+def _set_col_widths(tbl, widths_cm):
+    """Set individual column widths on a table."""
+    tblGrid = OxmlElement("w:tblGrid")
+    for w in widths_cm:
+        gridCol = OxmlElement("w:gridCol")
+        # 1 cm ≈ 567 twips
+        gridCol.set(qn("w:w"), str(int(w * 567)))
+        tblGrid.append(gridCol)
+    tbl._tbl.insert(0, tblGrid)
+
+
+# ================================================================
+# 📝  DOCX REPORT
+# ================================================================
 class DOCXReport:
     def __init__(self, inv, prof, date):
         self.inv  = inv
@@ -678,11 +315,14 @@ class DOCXReport:
         _safe_set_hint(run)
 
     def build(self) -> bytes:
-        # ── document setup ─────────────────────────────────────
         doc = self.doc
+
+        # ── document setup ─────────────────────────────────────
         sec = doc.sections[0]
-        sec.right_margin = Cm(2); sec.left_margin  = Cm(2)
-        sec.top_margin   = Cm(3); sec.bottom_margin = Cm(2)
+        sec.right_margin  = Cm(2)
+        sec.left_margin   = Cm(2)
+        sec.top_margin    = Cm(3)
+        sec.bottom_margin = Cm(2)
         doc.styles["Normal"].font.name = "Amiri"
         doc.styles["Normal"].font.size = Pt(11)
 
@@ -690,7 +330,18 @@ class DOCXReport:
         hp = (sec.header.paragraphs[0]
                if sec.header.paragraphs else sec.header.add_paragraph())
         _rtl_para(hp)
-        self._hdr_run(hp,
+
+        # Try to insert logo in header
+        if LOGO_PATH.exists():
+            try:
+                run_logo = hp.add_run()
+                run_logo.add_picture(str(LOGO_PATH), height=Cm(1.0))
+                hp.add_run("  ")   # small spacer
+            except Exception:
+                pass
+
+        self._hdr_run(
+            hp,
             f"{UNIV_NAME}  |  {FAC_NAME}  |  {LAB_NAME}  |  {self.date}",
             size=9, bold=True)
 
@@ -701,12 +352,23 @@ class DOCXReport:
         self._hdr_run(fp, f"{UNIV_NAME} — {FAC_NAME} — {LAB_NAME}", size=8)
 
         # ── COVER ──────────────────────────────────────────────
+        # Logo (centred)
         lp = doc.add_paragraph()
         lp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        lr = lp.add_run("[ شعار جامعة قناة السويس ]")
-        lr.font.size = Pt(14)
-        lr.font.color.rgb = RGBColor(0xaa, 0xbb, 0xcc)
-        _safe_set_hint(lr)
+        if LOGO_PATH.exists():
+            try:
+                lr = lp.add_run()
+                lr.add_picture(str(LOGO_PATH), height=Cm(3.5))
+            except Exception:
+                lr = lp.add_run("[ شعار جامعة قناة السويس ]")
+                lr.font.size = Pt(14)
+                lr.font.color.rgb = RGBColor(0xaa, 0xbb, 0xcc)
+                _safe_set_hint(lr)
+        else:
+            lr = lp.add_run("[ شعار جامعة قناة السويس ]")
+            lr.font.size = Pt(14)
+            lr.font.color.rgb = RGBColor(0xaa, 0xbb, 0xcc)
+            _safe_set_hint(lr)
 
         doc.add_paragraph()
         self._heading(UNIV_NAME, 22, "1a5276")
@@ -719,10 +381,11 @@ class DOCXReport:
         self._heading(RPT_TITLE, 16, "1c2833")
         doc.add_paragraph()
 
-        # cover info table
+        # cover info table (RTL)
         ct = doc.add_table(3, 2)
         ct.style = "Table Grid"
-        ct.alignment = WD_TABLE_ALIGNMENT.CENTER
+        ct.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        _set_table_rtl(ct)
         for r, (lbl, val) in enumerate([
             ("تاريخ الجرد:", self.date),
             ("المُعِد:", self.prof or "—"),
@@ -731,7 +394,7 @@ class DOCXReport:
             for c, txt in enumerate([lbl, val]):
                 p = ct.rows[r].cells[c].paragraphs[0]
                 _rtl_para(p)
-                _safe_run(p, txt, bold=(c==0), size=11)
+                _safe_run(p, txt, bold=(c == 0), size=11)
 
         doc.add_page_break()
 
@@ -744,67 +407,79 @@ class DOCXReport:
             c = item.get("condition", "غير محدد")
             conds[c] = conds.get(c, 0) + 1
         rows_data = [
-            ("إجمالي عدد الأجهزة",   str(len(self.inv))),
-            ("عدد الماركات",          str(len(brands))),
-            ("تحتاج صيانة / معطلة",  str(conds.get("يحتاج صيانة",0)+conds.get("معطل",0))),
+            ("إجمالي عدد الأجهزة",  str(len(self.inv))),
+            ("عدد الماركات",         str(len(brands))),
+            ("تحتاج صيانة / معطلة", str(conds.get("يحتاج صيانة", 0) + conds.get("معطل", 0))),
         ]
         if self.dups:
             rows_data.append(("أرقام مكررة", str(len(self.dups))))
 
-        st2 = doc.add_table(len(rows_data)+1, 2)
+        st2 = doc.add_table(len(rows_data) + 1, 2)
         st2.style = "Table Grid"
         st2.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        _set_table_rtl(st2)
         for c, txt in enumerate(["البيان", "القيمة"]):
             cell = st2.rows[0].cells[c]
-            p = cell.paragraphs[0]; _rtl_para(p)
-            _safe_run(p, txt, bold=True, size=11)
+            p = cell.paragraphs[0]
+            _rtl_para(p)
+            _safe_run(p, txt, bold=True, size=11, color_hex="ffffff")
             _cell_shd(cell, "1a5276")
         for r, (lbl, val) in enumerate(rows_data):
             for c, txt in enumerate([lbl, val]):
-                p = st2.rows[r+1].cells[c].paragraphs[0]
+                p = st2.rows[r + 1].cells[c].paragraphs[0]
                 _rtl_para(p)
                 _safe_run(p, txt, size=11)
+                if r % 2 == 0:
+                    _cell_shd(st2.rows[r + 1].cells[c], "eaf0fb")
 
         doc.add_paragraph()
         doc.add_page_break()
 
-        # ── INVENTORY TABLE ────────────────────────────────────
+        # ── INVENTORY TABLE ─────────────────────────────────────
         self._heading("كشف الأجهزة والمعدات", 14, "1a5276")
-        hdrs = ["م", "نوع الجهاز", "الماركة / المصنّع",
-                "الرقم التسلسلي", "الحالة", "الملاحظات", "صورة"]
-        CW   = [Cm(1), Cm(3.5), Cm(2.5), Cm(2.5), Cm(2), Cm(3), Cm(2.5)]
 
-        tbl = doc.add_table(len(self.inv)+1, 7)
+        # Columns: م | نوع الجهاز | الماركة | الرقم التسلسلي | الحالة | الملاحظات | صورة
+        hdrs    = ["م", "نوع الجهاز", "الماركة / المصنّع",
+                   "الرقم التسلسلي", "الحالة", "الملاحظات", "صورة"]
+        CW_CM   = [1.0, 3.5, 2.5, 2.5, 2.0, 3.5, 2.5]
+
+        tbl = doc.add_table(len(self.inv) + 1, 7)
         tbl.style = "Table Grid"
         tbl.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        _set_table_rtl(tbl)
 
         # header row
-        for c, (h, w) in enumerate(zip(hdrs, CW)):
+        for c, h in enumerate(hdrs):
             cell = tbl.rows[0].cells[c]
-            cell.width = w
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _rtl_para(p)
-            _safe_run(p, h, bold=True, size=10)
+            _safe_run(p, h, bold=True, size=10, color_hex="ffffff")
             _cell_shd(cell, "1a5276")
 
         # data rows
         for r, item in enumerate(self.inv):
-            row = tbl.rows[r+1]
-            # set row height
+            row = tbl.rows[r + 1]
+
+            # row height
             trPr = row._tr.get_or_add_trPr()
             trH  = OxmlElement("w:trHeight")
             trH.set(qn("w:val"), "1700")
             trH.set(qn("w:hRule"), "exact")
             trPr.append(trH)
 
-            vals = [str(r+1), item.get("device_type","—"), item.get("brand","—"),
-                    item.get("serial_number","—"), item.get("condition","—"),
-                    item.get("notes","—"), None]
+            vals = [
+                str(r + 1),
+                item.get("device_type", "—"),
+                item.get("brand", "—"),
+                item.get("serial_number", "—"),
+                item.get("condition", "—"),
+                item.get("notes", "—"),
+                None,   # photo placeholder
+            ]
 
             for c, val in enumerate(vals):
                 cell = row.cells[c]
-                cell.width = CW[c]
                 p = cell.paragraphs[0]
                 p.alignment = (WD_ALIGN_PARAGRAPH.CENTER
                                 if c in (0, 6) else WD_ALIGN_PARAGRAPH.RIGHT)
@@ -814,7 +489,8 @@ class DOCXReport:
                     ph = None
                     for pi in item.get("photos", []):
                         if pi.get("is_primary"):
-                            ph = pi["data"]; break
+                            ph = pi["data"]
+                            break
                     if ph is None and item.get("photos"):
                         ph = item["photos"][0]["data"]
                     if ph:
@@ -839,43 +515,54 @@ class DOCXReport:
         if self.dups:
             doc.add_page_break()
             self._heading("أجهزة بأرقام تسلسلية مكررة", 13, "c0392b")
-            dt = doc.add_table(len(self.dups)+1, 2)
+            dt = doc.add_table(len(self.dups) + 1, 2)
             dt.style = "Table Grid"
+            dt.alignment = WD_TABLE_ALIGNMENT.RIGHT
+            _set_table_rtl(dt)
             for c, txt in enumerate(["الرقم التسلسلي", "أرقام الصفوف"]):
                 cell = dt.rows[0].cells[c]
-                p = cell.paragraphs[0]; _rtl_para(p)
-                _safe_run(p, txt, bold=True, size=11)
+                p = cell.paragraphs[0]
+                _rtl_para(p)
+                _safe_run(p, txt, bold=True, size=11, color_hex="ffffff")
                 _cell_shd(cell, "c0392b")
             for r, (sn, idx) in enumerate(self.dups):
                 for c, txt in enumerate([sn, "، ".join(str(x) for x in idx)]):
-                    p = dt.rows[r+1].cells[c].paragraphs[0]
+                    p = dt.rows[r + 1].cells[c].paragraphs[0]
                     _rtl_para(p)
                     _safe_run(p, txt, size=10)
             doc.add_paragraph()
 
         # ── SIGNATURE ──────────────────────────────────────────
+        doc.add_page_break()
         doc.add_paragraph()
+
         sig = doc.add_table(4, 2)
-        for r, (l, rr) in enumerate([
-            ("اعتُمد بمعرفة:",              "المراجع / الرئيس المباشر:"),
-            (f"أ.د / {self.prof or '....'}", "د / ......................"),
+        sig.style = "Table Grid"
+        sig.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        _set_table_rtl(sig)
+
+        # NOTE: "أ.د/" prefix removed from signature per requirements
+        sig_rows = [
+            ("اعتُمد بمعرفة:",                      "المراجع / الرئيس المباشر:"),
+            (self.prof or "......................",    "......................"),
             ("", ""),
-            ("التوقيع: _______________",    "التوقيع: _______________"),
-        ]):
-            for c, txt in enumerate([l, rr]):
-                p = sig.rows[r].cells[c].paragraphs[0]
-                p.alignment = (WD_ALIGN_PARAGRAPH.RIGHT
-                                if c == 0 else WD_ALIGN_PARAGRAPH.LEFT)
+            ("التوقيع: _______________",             "التوقيع: _______________"),
+        ]
+        for r, (left_txt, right_txt) in enumerate(sig_rows):
+            for c, txt in enumerate([left_txt, right_txt]):
+                cell = sig.rows[r].cells[c]
+                p = cell.paragraphs[0]
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 _rtl_para(p)
-                _safe_run(p, txt, bold=(r==1), size=11)
+                _safe_run(p, txt, bold=(r == 1), size=11)
 
         doc.add_paragraph()
         fp2 = doc.add_paragraph()
         fp2.alignment = WD_ALIGN_PARAGRAPH.CENTER
         _rtl_para(fp2)
         _safe_run(fp2,
-                   f"هذا الكشف صادر من إدارة {LAB_NAME} — {FAC_NAME} — {UNIV_NAME}",
-                   size=9, color_hex="999999")
+                  f"هذا الكشف صادر من إدارة {LAB_NAME} — {FAC_NAME} — {UNIV_NAME}",
+                  size=9, color_hex="999999")
 
         buf = io.BytesIO()
         doc.save(buf)
@@ -888,9 +575,9 @@ class DOCXReport:
 def nav():
     cols = st.columns(3)
     items = [
-        ("📷", "إضافة جهاز", "capture"),
+        ("📷", "إضافة جهاز",                          "capture"),
         ("📋", f"القائمة ({len(st.session_state.inventory)})", "list"),
-        ("📤", "تصدير", "export"),
+        ("📤", "تصدير",                                "export"),
     ]
     for col, (icon, label, pg) in zip(cols, items):
         active = "✅ " if st.session_state.page == pg else ""
@@ -901,24 +588,25 @@ def nav():
 
 
 def add_photo(data: bytes, is_primary: bool, label: str):
+    """Add a photo only if it hasn't been added before (hash-based dedup)."""
     h = hash(data)
     if h not in st.session_state.photo_hashes:
         st.session_state.photo_hashes.add(h)
         st.session_state.captured_photos.append({
-            "id": uuid.uuid4().hex[:8],
-            "data": data,
+            "id":         uuid.uuid4().hex[:8],
+            "data":       data,
             "is_primary": is_primary,
-            "label": label,
+            "label":      label,
         })
 
 
 # ================================================================
-# ✏️  IMAGE EDITOR  (PIL only, no API)
+# ✏️  IMAGE EDITOR
 # ================================================================
 def image_editor(idx: int):
     ph   = st.session_state.captured_photos[idx]
     data = ph["data"]
-    st.markdown(f'<div class="editor-box">', unsafe_allow_html=True)
+    st.markdown('<div class="editor-box">', unsafe_allow_html=True)
     st.markdown(f"**✏️ تعديل: {ph['label']}**")
 
     c1, c2 = st.columns([3, 1])
@@ -939,7 +627,6 @@ def image_editor(idx: int):
     cb = cc2.slider("✂️ قص أسفل %", 0, 45, 0, key=f"cb_{ph['id']}")
     crop_box = (cl/100, ct/100, 1.0-cr/100, 1.0-cb/100)
 
-    # live preview
     try:
         preview = process_image(data, rotate_deg=rotate,
                                 crop_box=crop_box, enhance=enh)
@@ -967,60 +654,53 @@ def image_editor(idx: int):
 # ================================================================
 def page_capture():
     # Settings
-    with st.expander("⚙️ إعدادات التقرير", expanded=not st.session_state.professor_name):
+    with st.expander("⚙️ إعدادات التقرير",
+                     expanded=not st.session_state.professor_name):
         c1, c2 = st.columns(2)
         st.session_state.professor_name = c1.text_input(
             "👤 اسم الأستاذ المسؤول",
             value=st.session_state.professor_name,
-            placeholder="أ.د / تامر الغرباوي...")
+            placeholder="تامر الغرباوي...")
         st.session_state.report_date = c2.text_input(
             "📅 تاريخ الجرد",
             value=st.session_state.report_date)
 
     st.markdown("---")
 
-    # ── STEP 1: Photos ───────────────────────────────────────────
-    st.markdown('<div class="step-label">📸 الخطوة 1 — رفع صور الجهاز وتعديلها</div>',
+    # ── STEP 1: Single Photo ─────────────────────────────────────
+    st.markdown('<div class="step-label">📸 الخطوة 1 — رفع صورة الجهاز</div>',
                 unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        prim = st.file_uploader(
-            "⭐ الصورة الرئيسية (تظهر في التقرير)",
-            type=["jpg","jpeg","png","webp"],
-            key="up_primary")
-    with col2:
-        refs = st.file_uploader(
-            "📎 صور إضافية (زوايا أخرى، لوحة البيانات...)",
-            type=["jpg","jpeg","png","webp"],
-            accept_multiple_files=True,
-            key="up_refs")
+    # form_counter key ensures the uploader resets after each "add" action
+    fk = st.session_state.form_counter
+    prim = st.file_uploader(
+        "⭐ صورة الجهاز (تظهر في التقرير)",
+        type=["jpg", "jpeg", "png", "webp"],
+        key=f"up_primary_{fk}")
 
-    ca, cb = st.columns(2)
+    ca, cb_btn = st.columns(2)
     with ca:
-        if st.button("📥 تثبيت الصور"):
-            added = 0
+        if st.button("📥 تثبيت الصورة"):
             if prim:
-                add_photo(resize_img(prim.read()), True,  "الصورة الرئيسية")
-                added += 1
-            if refs:
-                for i, rf in enumerate(refs):
-                    add_photo(resize_img(rf.read()), False, f"إضافية {i+1}")
-                    added += 1
-            if added:
-                st.success(f"✅ أُضيفت {added} صورة")
+                # Replace any existing photo (single-image mode)
+                st.session_state.captured_photos = []
+                st.session_state.photo_hashes    = set()
+                add_photo(resize_img(prim.read()), True, "الصورة الرئيسية")
+                st.success("✅ تمت إضافة الصورة")
                 st.rerun()
-    with cb:
-        if st.button("🗑️ مسح جميع الصور"):
+            else:
+                st.warning("⚠️ اختر صورة أولاً")
+    with cb_btn:
+        if st.button("🗑️ مسح الصورة"):
             st.session_state.captured_photos = []
             st.session_state.photo_hashes    = set()
             st.session_state.edit_photo_idx  = None
             st.rerun()
 
-    # Photo gallery
+    # Photo preview
     shots = st.session_state.captured_photos
     if shots:
-        st.markdown(f"**{len(shots)} صورة مُثبَّتة — اضغط ✏️ لتعديل الاتجاه والقص:**")
+        st.markdown("**صورة مُثبَّتة — اضغط ✏️ لتعديل الاتجاه والقص:**")
 
         if st.session_state.edit_photo_idx is not None:
             idx = st.session_state.edit_photo_idx
@@ -1029,39 +709,25 @@ def page_capture():
             else:
                 st.session_state.edit_photo_idx = None
         else:
-            cols = st.columns(min(len(shots), 3))
-            to_del = []
-            for i, ph in enumerate(shots):
-                with cols[i % 3]:
-                    bc = "badge-primary" if ph["is_primary"] else "badge-ref"
-                    st.markdown(f"""
-                    <div class="photo-card">
-                      <span class="{bc}">{ph['label']}</span><br><br>
-                      <img src="data:image/jpeg;base64,{b64img(ph['data'])}"
-                           style="width:100%;border-radius:8px;max-height:135px;object-fit:cover;"/>
-                    </div>""", unsafe_allow_html=True)
-                    ea, eb = st.columns(2)
-                    with ea:
-                        if st.button("✏️ تعديل", key=f"ed_{ph['id']}"):
-                            st.session_state.edit_photo_idx = i
-                            st.rerun()
-                    with eb:
-                        if st.button("🗑️ حذف", key=f"dl_{ph['id']}"):
-                            to_del.append(ph["id"])
-            if to_del:
-                st.session_state.photo_hashes = {
-                    hash(p["data"]) for p in shots if p["id"] not in to_del}
-                st.session_state.captured_photos = [
-                    p for p in shots if p["id"] not in to_del]
-                st.rerun()
+            ph = shots[0]
+            col_img, col_btns = st.columns([2, 1])
+            with col_img:
+                st.markdown(f"""
+                <div class="photo-card">
+                  <span class="badge-primary">{ph['label']}</span><br><br>
+                  <img src="data:image/jpeg;base64,{b64img(ph['data'])}"
+                       style="width:100%;border-radius:8px;max-height:200px;object-fit:cover;"/>
+                </div>""", unsafe_allow_html=True)
+            with col_btns:
+                if st.button("✏️ تعديل الصورة", key=f"ed_{ph['id']}"):
+                    st.session_state.edit_photo_idx = 0
+                    st.rerun()
 
-        # Quick enhance all
-        if st.button("✨ تحسين تلقائي لجميع الصور (تباين + حدة)"):
+        if st.button("✨ تحسين تلقائي (تباين + حدة)"):
             with st.spinner("⏳ معالجة..."):
-                for i in range(len(st.session_state.captured_photos)):
-                    d = st.session_state.captured_photos[i]["data"]
-                    st.session_state.captured_photos[i]["data"] = process_image(
-                        d, enhance=True)
+                d = st.session_state.captured_photos[0]["data"]
+                st.session_state.captured_photos[0]["data"] = process_image(
+                    d, enhance=True)
             st.success("✅ تمت المعالجة")
             st.rerun()
 
@@ -1076,19 +742,28 @@ def page_capture():
       📋 أدخل بيانات الجهاز يدوياً من خلال قراءة لوحة البيانات أو الجهاز نفسه
     </div>""", unsafe_allow_html=True)
 
+    # Keyed inputs reset automatically when form_counter increments
     fc1, fc2 = st.columns(2)
-    device_type = fc1.text_input("🔧 نوع الجهاز",
-        placeholder="مثال: جهاز مستوي آلي، ترازيت، GPS، محطة شاملة...")
-    brand = fc2.text_input("🏭 الماركة / المصنّع",
-        placeholder="مثال: Leica, Trimble, Topcon, Sokkia...")
-    serial = fc1.text_input("🔢 الرقم التسلسلي",
-        placeholder="اقرأه من لوحة بيانات الجهاز...")
-    condition = fc2.selectbox("📊 الحالة", STATUS_OPT, index=2)
-    notes = st.text_area("📒 ملاحظات الأستاذ",
+    device_type = fc1.text_input(
+        "🔧 نوع الجهاز",
+        placeholder="مثال: جهاز مستوي آلي، ترازيت، GPS، محطة شاملة...",
+        key=f"device_type_{fk}")
+    brand = fc2.text_input(
+        "🏭 الماركة / المصنّع",
+        placeholder="مثال: Leica, Trimble, Topcon, Sokkia...",
+        key=f"brand_{fk}")
+    serial = fc1.text_input(
+        "🔢 الرقم التسلسلي",
+        placeholder="اقرأه من لوحة بيانات الجهاز...",
+        key=f"serial_{fk}")
+    condition = fc2.selectbox("📊 الحالة", STATUS_OPT, index=2, key=f"cond_{fk}")
+    notes = st.text_area(
+        "📒 ملاحظات الأستاذ",
         height=100,
-        placeholder="أي ملاحظات تقنية أو حالة الجهاز أو ملحقاته...")
+        placeholder="أي ملاحظات تقنية أو حالة الجهاز أو ملحقاته...",
+        key=f"notes_{fk}")
 
-    # Duplicate warning
+    # Duplicate warning — only fires when serial is non-empty AND already in inventory
     if serial and is_duplicate(serial):
         st.markdown(f"""
         <div class="dup-warning">
@@ -1112,6 +787,8 @@ def page_capture():
                 "is_duplicate":  is_duplicate(serial),
                 "added_at":      datetime.datetime.now().strftime("%H:%M"),
             })
+            # Reset form by incrementing the counter
+            st.session_state.form_counter  += 1
             st.session_state.captured_photos = []
             st.session_state.photo_hashes    = set()
             st.session_state.edit_photo_idx  = None
@@ -1120,6 +797,7 @@ def page_capture():
             st.rerun()
     with s2:
         if st.button("↩️ مسح النموذج"):
+            st.session_state.form_counter  += 1
             st.session_state.captured_photos = []
             st.session_state.photo_hashes    = set()
             st.session_state.edit_photo_idx  = None
@@ -1147,7 +825,7 @@ def page_list():
     c4.metric("🔄 مكررة",           dups)
 
     if dups:
-        st.error(f"⚠️ يوجد **{dups}** رقم تسلسلي مكرر — راجعها في تقرير PDF")
+        st.error(f"⚠️ يوجد **{dups}** رقم تسلسلي مكرر")
 
     st.markdown("---")
 
@@ -1202,68 +880,35 @@ def page_export():
       <strong>⚠️</strong> أرقام مكررة: {len(dups)}
     </div>""", unsafe_allow_html=True)
 
-    # Pre-load fonts
-    with st.spinner("⏳ تحميل خط Amiri العربي..."):
-        fonts_ok, fonts_msg = setup_fonts()
+    st.markdown("#### 📝 ملف Word (DOCX)")
+    st.caption("للتعديل والمراجعة — جدول RTL محاذٍ لليمين")
 
-    if not fonts_ok:
-        st.error(f"❌ فشل تحميل الخط: {fonts_msg}")
-        st.info("💡 جرّب الضغط مرة أخرى — قد تكون مشكلة اتصال مؤقتة")
-        # offer DOCX-only since that doesn't need the external font file
-    else:
-        st.success("✅ الخط العربي Amiri جاهز")
-
-    st.markdown("---")
-    cp, cd = st.columns(2)
-
-    with cp:
-        st.markdown("#### 📄 ملف PDF")
-        st.caption("للأرشفة الرسمية والطباعة")
-        if st.button("🖨️ توليد PDF", disabled=not fonts_ok, type="primary"):
-            with st.spinner("⏳ جاري إنشاء PDF..."):
-                try:
-                    pdf = PDFReport(
-                        inv,
-                        st.session_state.professor_name,
-                        st.session_state.report_date).build()
-                    fn = (f"جرد_{LAB_NAME}_"
-                          f"{st.session_state.report_date.replace('/','-')}.pdf")
-                    st.download_button(
-                        "⬇️ تحميل PDF", pdf, fn, "application/pdf", key="dl_pdf")
-                    st.success("✅ PDF جاهز للتحميل!")
-                except Exception as e:
-                    st.error(f"❌ خطأ PDF: {e}")
-                    import traceback
-                    st.code(traceback.format_exc(), language="text")
-
-    with cd:
-        st.markdown("#### 📝 ملف Word (DOCX)")
-        st.caption("للتعديل والمراجعة — لا يحتاج خطوطاً خارجية")
-        if st.button("📄 توليد DOCX"):
-            with st.spinner("⏳ جاري إنشاء DOCX..."):
-                try:
-                    docx_b = DOCXReport(
-                        inv,
-                        st.session_state.professor_name,
-                        st.session_state.report_date).build()
-                    fn = (f"جرد_{LAB_NAME}_"
-                          f"{st.session_state.report_date.replace('/','-')}.docx")
-                    MIME = ("application/vnd.openxmlformats-officedocument"
-                            ".wordprocessingml.document")
-                    st.download_button(
-                        "⬇️ تحميل DOCX", docx_b, fn, MIME, key="dl_docx")
-                    st.success("✅ DOCX جاهز للتحميل!")
-                except Exception as e:
-                    st.error(f"❌ خطأ DOCX: {e}")
-                    import traceback
-                    st.code(traceback.format_exc(), language="text")
+    if st.button("📄 توليد DOCX", type="primary"):
+        with st.spinner("⏳ جاري إنشاء DOCX..."):
+            try:
+                docx_b = DOCXReport(
+                    inv,
+                    st.session_state.professor_name,
+                    st.session_state.report_date).build()
+                fn = (f"جرد_{LAB_NAME}_"
+                      f"{st.session_state.report_date.replace('/','-')}.docx")
+                MIME = ("application/vnd.openxmlformats-officedocument"
+                        ".wordprocessingml.document")
+                st.download_button(
+                    "⬇️ تحميل DOCX", docx_b, fn, MIME, key="dl_docx")
+                st.success("✅ DOCX جاهز للتحميل!")
+            except Exception as e:
+                st.error(f"❌ خطأ DOCX: {e}")
+                import traceback
+                st.code(traceback.format_exc(), language="text")
 
     st.markdown("---")
     with st.expander("⚠️ خيارات متقدمة"):
         if st.button("🗑️ مسح قائمة الجرد بالكامل"):
-            for k in ["inventory", "captured_photos", "ai_result"]:
+            for k in ["inventory", "captured_photos"]:
                 st.session_state[k] = []
-            st.session_state.photo_hashes = set()
+            st.session_state.photo_hashes  = set()
+            st.session_state.form_counter += 1
             st.success("✅ تم المسح")
             st.rerun()
 
