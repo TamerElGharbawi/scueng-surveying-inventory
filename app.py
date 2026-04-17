@@ -252,13 +252,33 @@ def _safe_run(para, text, bold=False, size=11, color_hex=None):
 
 
 def _rtl_para(para):
-    pPr = para._p.get_or_add_pPr()
-    b = OxmlElement("w:bidi")
-    b.set(qn("w:val"), "1")
-    pPr.append(b)
+    p = para._p
+    pPr = p.get_or_add_pPr()
+
+    # Remove existing bidi if any (avoid duplication)
+    for el in pPr.findall(qn("w:bidi")):
+        pPr.remove(el)
+
+    bidi = OxmlElement("w:bidi")
+    bidi.set(qn("w:val"), "1")
+    pPr.append(bidi)
+
+    # Ensure right alignment
     para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
+def _set_cell_rtl(cell):
+    """Force RTL inside table cell (fixes mixed direction issue in Word)."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
 
+    # Remove existing bidi if present
+    for el in tcPr.findall(qn("w:bidi")):
+        tcPr.remove(el)
+
+    bidi = OxmlElement("w:bidi")
+    bidi.set(qn("w:val"), "1")
+    tcPr.append(bidi)
+    
 def _cell_shd(cell, fill_hex):
     shd = OxmlElement("w:shd")
     shd.set(qn("w:fill"), fill_hex)
@@ -268,21 +288,42 @@ def _cell_shd(cell, fill_hex):
 
 def _set_table_rtl(tbl):
     """Force table to render right-to-left (columns order reversed visually)."""
-    tblPr = tbl._tbl.get_or_add_tblPr()
-    bidi = OxmlElement("w:bidiVisual")
-    bidi.set(qn("w:val"), "1")
-    tblPr.append(bidi)
+
+    tbl_elem = tbl._tbl
+
+    # --- FIX FOR OLD python-docx ---
+    # Instead of: get_or_add_tblPr()
+    tblPr = tbl_elem.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl_elem.insert(0, tblPr)
+
+    # Avoid duplicate bidiVisual
+    existing = tblPr.findall(qn("w:bidiVisual"))
+    if not existing:
+        bidi = OxmlElement("w:bidiVisual")
+        bidi.set(qn("w:val"), "1")
+        tblPr.append(bidi)
 
 
 def _set_col_widths(tbl, widths_cm):
     """Set individual column widths on a table."""
-    tblGrid = OxmlElement("w:tblGrid")
+    tbl_elem = tbl._tbl
+
+    # Ensure tblGrid exists safely
+    tblGrid = tbl_elem.tblGrid
+    if tblGrid is None:
+        tblGrid = OxmlElement("w:tblGrid")
+        tbl_elem.insert(1, tblGrid)
+
+    # Clear existing grid
+    for child in list(tblGrid):
+        tblGrid.remove(child)
+
     for w in widths_cm:
         gridCol = OxmlElement("w:gridCol")
-        # 1 cm ≈ 567 twips
-        gridCol.set(qn("w:w"), str(int(w * 567)))
+        gridCol.set(qn("w:w"), str(int(w * 567)))  # cm → twips
         tblGrid.append(gridCol)
-    tbl._tbl.insert(0, tblGrid)
 
 
 # ================================================================
@@ -392,7 +433,10 @@ class DOCXReport:
             ("إجمالي الأجهزة:", str(len(self.inv))),
         ]):
             for c, txt in enumerate([lbl, val]):
-                p = ct.rows[r].cells[c].paragraphs[0]
+                cell = ct.rows[r].cells[c]
+                _set_cell_rtl(cell)
+                p = cell.paragraphs[0]
+                
                 _rtl_para(p)
                 _safe_run(p, txt, bold=(c == 0), size=11)
 
@@ -420,13 +464,17 @@ class DOCXReport:
         _set_table_rtl(st2)
         for c, txt in enumerate(["البيان", "القيمة"]):
             cell = st2.rows[0].cells[c]
+            _set_cell_rtl(cell)
             p = cell.paragraphs[0]
             _rtl_para(p)
             _safe_run(p, txt, bold=True, size=11, color_hex="ffffff")
             _cell_shd(cell, "1a5276")
         for r, (lbl, val) in enumerate(rows_data):
             for c, txt in enumerate([lbl, val]):
-                p = st2.rows[r + 1].cells[c].paragraphs[0]
+
+                cell = st2.rows[r + 1].cells[c]
+                _set_cell_rtl(cell)
+                p = cell.paragraphs[0]
                 _rtl_para(p)
                 _safe_run(p, txt, size=11)
                 if r % 2 == 0:
@@ -451,6 +499,7 @@ class DOCXReport:
         # header row
         for c, h in enumerate(hdrs):
             cell = tbl.rows[0].cells[c]
+            _set_cell_rtl(cell)
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _rtl_para(p)
@@ -480,6 +529,7 @@ class DOCXReport:
 
             for c, val in enumerate(vals):
                 cell = row.cells[c]
+                _set_cell_rtl(cell)
                 p = cell.paragraphs[0]
                 p.alignment = (WD_ALIGN_PARAGRAPH.CENTER
                                 if c in (0, 6) else WD_ALIGN_PARAGRAPH.RIGHT)
@@ -521,6 +571,7 @@ class DOCXReport:
             _set_table_rtl(dt)
             for c, txt in enumerate(["الرقم التسلسلي", "أرقام الصفوف"]):
                 cell = dt.rows[0].cells[c]
+                _set_cell_rtl(cell)
                 p = cell.paragraphs[0]
                 _rtl_para(p)
                 _safe_run(p, txt, bold=True, size=11, color_hex="ffffff")
@@ -551,6 +602,7 @@ class DOCXReport:
         for r, (left_txt, right_txt) in enumerate(sig_rows):
             for c, txt in enumerate([left_txt, right_txt]):
                 cell = sig.rows[r].cells[c]
+                _set_cell_rtl(cell)
                 p = cell.paragraphs[0]
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 _rtl_para(p)
